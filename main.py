@@ -15,21 +15,11 @@ import random
 INPUT_CSV_PATH = Path("storage/input/COM_SENSOR_DATA.csv")
 OUTPUT_DIR = Path("storage/output")
 REQUIRED_CONSTANT_COLUMNS = ["EQUIP_SN", "FARM_ID", "SITE_ID", "MEAS_DEPTH"]
+SENSOR_COLUMNS = ["VAL_TP", "VAL_DO", "VAL_DS", "VAL_PH", "VAL_OR", "VAL_SL"]
 TIME_INTERVAL = timedelta(hours=1)
 MAX_VARIATION_RATE = 0.01  # ±1%
+DECIMAL_PLACES = 2  # 소수점 자릿수
 BATCH_SIZE = 10  # INSERT ALL 최대 줄 수
-
-# 센서 컬럼 정의 및 정밀도 설정
-# 각 센서 값의 전체 자릿수와 소수점 자릿수 정의
-SENSOR_PRECISION = {
-    "VAL_TP": {"total": 6, "decimal": 1},  # 수온 NUMBER(6,1)
-    "VAL_DO": {"total": 5, "decimal": 1},  # 용존산소 NUMBER(5,1)
-    "VAL_DS": {"total": 6, "decimal": 1},  # 포화도 NUMBER(6,1)
-    "VAL_PH": {"total": 5, "decimal": 1},  # pH NUMBER(5,1)
-    "VAL_OR": {"total": 6, "decimal": 1},  # ORP NUMBER(6,1)
-    "VAL_SL": {"total": 5, "decimal": 1},  # 염도 NUMBER(5,1)
-}
-SENSOR_COLUMNS = list(SENSOR_PRECISION.keys())
 
 
 def load_csv(file_path: Path) -> pd.DataFrame:
@@ -368,8 +358,7 @@ def interpolate_missing_data(
                     missing_hours,
                     step,
                 )
-                decimal_places = SENSOR_PRECISION[col]["decimal"]
-                new_row[col] = round(interpolated_value, decimal_places)
+                new_row[col] = round(interpolated_value, DECIMAL_PLACES)
                 current_values[col] = new_row[col]
 
             new_row["DATA_SOURCE_TYPE"] = "ESTIMATED"
