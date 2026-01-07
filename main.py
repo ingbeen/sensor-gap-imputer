@@ -17,7 +17,15 @@ OUTPUT_DIR = Path("storage/output")
 REQUIRED_CONSTANT_COLUMNS = ["EQUIP_SN", "FARM_ID", "SITE_ID", "MEAS_DEPTH"]
 SENSOR_COLUMNS = ["VAL_TP", "VAL_DO", "VAL_DS", "VAL_PH", "VAL_OR", "VAL_SL"]
 TIME_INTERVAL = timedelta(hours=1)
-MAX_VARIATION_RATE = 0.01  # ±1%
+# 센서별 변동률 (단위: 소수, 예: 0.01 = ±1%)
+MAX_VARIATION_RATES = {
+    "VAL_TP": 0.01,  # 수온
+    "VAL_DO": 0.01,  # 용존산소
+    "VAL_DS": 0.01,  # 포화도
+    "VAL_PH": 0.01,  # pH
+    "VAL_OR": 0.01,  # ORP
+    "VAL_SL": 0.01,  # 염도
+}
 DECIMAL_PLACES = 2  # 소수점 자릿수
 BATCH_SIZE = 10  # INSERT ALL 최대 줄 수
 
@@ -67,8 +75,7 @@ def validate_constant_columns(df: pd.DataFrame) -> dict[str, Any]:
         unique_values = df[col].unique()
         if len(unique_values) != 1:
             raise ValueError(
-                f"컬럼 '{col}'의 값이 일치하지 않습니다. "
-                f"발견된 값: {unique_values}"
+                f"컬럼 '{col}'의 값이 일치하지 않습니다. " f"발견된 값: {unique_values}"
             )
 
         constants[col] = unique_values[0]
@@ -108,7 +115,9 @@ def identify_missing_timestamps(df: pd.DataFrame) -> list[datetime]:
     return missing
 
 
-def format_missing_periods(missing_timestamps: list[datetime]) -> list[tuple[datetime, datetime, int]]:
+def format_missing_periods(
+    missing_timestamps: list[datetime],
+) -> list[tuple[datetime, datetime, int]]:
     """누락된 시간대를 연속된 기간으로 그룹화합니다.
 
     Args:
@@ -199,34 +208,39 @@ def linear_interpolate(
 
 
 def validate_variation_rate(
-    prev_value: float, next_value: float, missing_hours: int
+    prev_value: float, next_value: float, missing_hours: int, sensor_column: str
 ) -> None:
-    """누락 시간 동안 1%씩 변해도 목표값에 도달 가능한지 검증합니다.
+    """누락 시간 동안 센서별 변동률로 변해도 목표값에 도달 가능한지 검증합니다.
 
     Args:
         prev_value: 시작 값
         next_value: 종료 값
         missing_hours: 누락된 시간 개수
+        sensor_column: 센서 컬럼명 (변동률 확인용)
 
     Raises:
-        ValueError: 1%씩 변해도 목표값 도달 불가능한 경우
+        ValueError: 설정된 변동률로 변해도 목표값 도달 불가능한 경우
     """
     if prev_value == 0:
         if abs(next_value) > 0:
             raise ValueError("시작 값이 0일 때 다음 값이 0이 아닙니다")
         return
 
-    # 1. 필요한 전체 변화량
+    # 1. 센서별 변동률 가져오기
+    variation_rate = MAX_VARIATION_RATES[sensor_column]
+    variation_percent = variation_rate * 100
+
+    # 2. 필요한 전체 변화량
     total_change_needed = abs(next_value - prev_value)
 
-    # 2. 누락 시간 동안 1%씩 변할 수 있는 최대 변화량
-    max_change_per_hour = abs(prev_value * MAX_VARIATION_RATE)
+    # 3. 누락 시간 동안 변동률만큼 변할 수 있는 최대 변화량
+    max_change_per_hour = abs(prev_value * variation_rate)
     max_total_change = max_change_per_hour * missing_hours
 
-    # 3. 검증: 필요 변화량 <= 최대 변화량
+    # 4. 검증: 필요 변화량 <= 최대 변화량
     if total_change_needed > max_total_change:
         raise ValueError(
-            f"보간 불가능: {missing_hours}시간 동안 1%씩 변화해도 목표값 도달 불가\n"
+            f"보간 불가능 [{sensor_column}]: {missing_hours}시간 동안 {variation_percent}%씩 변화해도 목표값 도달 불가\n"
             f"필요 변화: {total_change_needed:.2f}, 최대 변화: {max_total_change:.2f}\n"
             f"(시작: {prev_value}, 종료: {next_value})"
         )
@@ -237,14 +251,16 @@ def random_interpolate_with_guarantee(
     next_value: float,
     missing_hours: int,
     current_step: int,
+    sensor_column: str,
 ) -> float:
-    """1% 이내 랜덤 변화로 보간하되 목표값 도달을 보장합니다.
+    """센서별 변동률 이내 랜덤 변화로 보간하되 목표값 도달을 보장합니다.
 
     Args:
         prev_value: 현재 시점의 값
         next_value: 최종 목표값
         missing_hours: 전체 누락 시간 개수
         current_step: 현재 단계 (1부터 시작)
+        sensor_column: 센서 컬럼명 (변동률 확인용)
 
     Returns:
         보간된 값
@@ -255,8 +271,9 @@ def random_interpolate_with_guarantee(
     # 2. 남은 단계 수
     remaining_steps = missing_hours - current_step + 1
 
-    # 3. 1% 이내에서 변화 가능한 범위
-    max_change_this_step = abs(prev_value * MAX_VARIATION_RATE)
+    # 3. 센서별 변동률 이내에서 변화 가능한 범위
+    variation_rate = MAX_VARIATION_RATES[sensor_column]
+    max_change_this_step = abs(prev_value * variation_rate)
 
     # 4. 목표 도달을 위한 최소 변화량 계산
     # 남은 단계에서 매번 최대로 변해도 도달해야 하므로
@@ -266,7 +283,9 @@ def random_interpolate_with_guarantee(
 
     # 5. 이번 단계에서 최소/최대 변화량 계산
     # 최소: 남은 단계 모두 최대로 변해도 목표 도달하도록
-    min_change_this_step = remaining_change - (max_change_this_step * (remaining_steps - 1))
+    min_change_this_step = remaining_change - (
+        max_change_this_step * (remaining_steps - 1)
+    )
 
     # 방향 고려 (증가/감소)
     if remaining_change > 0:
@@ -340,7 +359,7 @@ def interpolate_missing_data(
             next_value = next_data[col]
 
             # 변동률 검증
-            validate_variation_rate(prev_value, next_value, missing_hours)
+            validate_variation_rate(prev_value, next_value, missing_hours, col)
 
         # 2-3. 그룹 내 각 시간대 보간
         current_values = {col: prev_data[col] for col in sensor_columns}
@@ -357,6 +376,7 @@ def interpolate_missing_data(
                     next_data[col],
                     missing_hours,
                     step,
+                    col,
                 )
                 new_row[col] = round(interpolated_value, DECIMAL_PLACES)
                 current_values[col] = new_row[col]
@@ -388,10 +408,26 @@ def generate_insert_sql(
 
     # 필수 컬럼 정의
     columns = [
-        "EQUIP_SN", "ACQU_TIME", "MEAS_LAYER", "FARM_ID", "SITE_ID",
-        "MEAS_DEPTH", "VAL_TP", "VAL_DO", "VAL_DS", "VAL_PH", "VAL_OR",
-        "VAL_SL", "QC_TP", "QC_DO", "QC_DS", "QC_PH", "QC_OR", "QC_SL",
-        "REGI_TIME", "DATA_SOURCE_TYPE"
+        "EQUIP_SN",
+        "ACQU_TIME",
+        "MEAS_LAYER",
+        "FARM_ID",
+        "SITE_ID",
+        "MEAS_DEPTH",
+        "VAL_TP",
+        "VAL_DO",
+        "VAL_DS",
+        "VAL_PH",
+        "VAL_OR",
+        "VAL_SL",
+        "QC_TP",
+        "QC_DO",
+        "QC_DS",
+        "QC_PH",
+        "QC_OR",
+        "QC_SL",
+        "REGI_TIME",
+        "DATA_SOURCE_TYPE",
     ]
 
     with open(output_path, "w", encoding="utf-8") as f:
