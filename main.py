@@ -19,12 +19,12 @@ SENSOR_COLUMNS = ["VAL_TP", "VAL_DO", "VAL_DS", "VAL_PH", "VAL_OR", "VAL_SL"]
 TIME_INTERVAL = timedelta(hours=1)
 # 센서별 변동률 (단위: 소수, 예: 0.01 = ±1%)
 MAX_VARIATION_RATES = {
-    "VAL_TP": 0.01,  # 수온
-    "VAL_DO": 0.01,  # 용존산소
-    "VAL_DS": 0.01,  # 포화도
-    "VAL_PH": 0.01,  # pH
+    "VAL_TP": 0.015,  # 수온
+    "VAL_DO": 0.005,  # 용존산소
+    "VAL_DS": 0.005,  # 포화도
+    "VAL_PH": 0.005,  # pH
     "VAL_OR": 0.01,  # ORP
-    "VAL_SL": 0.01,  # 염도
+    "VAL_SL": 0.005,  # 염도
 }
 DECIMAL_PLACES = 2  # 소수점 자릿수
 BATCH_SIZE = 10  # INSERT ALL 최대 줄 수
@@ -221,29 +221,43 @@ def validate_variation_rate(
     Raises:
         ValueError: 설정된 변동률로 변해도 목표값 도달 불가능한 경우
     """
+    print(f"      [DEBUG] validate_variation_rate 호출: {sensor_column}")
+    print(
+        f"              시작값: {prev_value}, 종료값: {next_value}, 누락시간: {missing_hours}시간"
+    )
+
     if prev_value == 0:
         if abs(next_value) > 0:
             raise ValueError("시작 값이 0일 때 다음 값이 0이 아닙니다")
+        print("              시작값이 0이고 종료값도 0 → 검증 통과")
         return
 
     # 1. 센서별 변동률 가져오기
     variation_rate = MAX_VARIATION_RATES[sensor_column]
     variation_percent = variation_rate * 100
+    print(f"              변동률: {variation_percent}%")
 
     # 2. 필요한 전체 변화량
     total_change_needed = abs(next_value - prev_value)
+    print(f"              필요 변화량: {total_change_needed:.2f}")
 
     # 3. 누락 시간 동안 변동률만큼 변할 수 있는 최대 변화량
     max_change_per_hour = abs(prev_value * variation_rate)
     max_total_change = max_change_per_hour * missing_hours
+    print(
+        f"              최대 변화량: {max_total_change:.2f} (시간당 {max_change_per_hour:.2f} × {missing_hours})"
+    )
 
     # 4. 검증: 필요 변화량 <= 최대 변화량
     if total_change_needed > max_total_change:
+        print("              → 검증 실패 (필요 > 최대)")
         raise ValueError(
             f"보간 불가능 [{sensor_column}]: {missing_hours}시간 동안 {variation_percent}%씩 변화해도 목표값 도달 불가\n"
             f"필요 변화: {total_change_needed:.2f}, 최대 변화: {max_total_change:.2f}\n"
             f"(시작: {prev_value}, 종료: {next_value})"
         )
+
+    print("              → 검증 통과 (필요 ≤ 최대)")
 
 
 def random_interpolate_with_guarantee(
@@ -265,20 +279,31 @@ def random_interpolate_with_guarantee(
     Returns:
         보간된 값
     """
+    print(
+        f"        [DEBUG] random_interpolate_with_guarantee 호출: {sensor_column}, 단계 {current_step}/{missing_hours}"
+    )
+    print(f"                현재값: {prev_value}, 목표값: {next_value}")
+
     # 1. 남은 변화량 계산
     remaining_change = next_value - prev_value
+    print(f"                남은 변화량: {remaining_change:.2f}")
 
     # 2. 남은 단계 수
     remaining_steps = missing_hours - current_step + 1
+    print(f"                남은 단계: {remaining_steps}")
 
     # 3. 센서별 변동률 이내에서 변화 가능한 범위
     variation_rate = MAX_VARIATION_RATES[sensor_column]
     max_change_this_step = abs(prev_value * variation_rate)
+    print(
+        f"                이번 단계 최대 변화량: ±{max_change_this_step:.2f} ({variation_rate*100}%)"
+    )
 
     # 4. 목표 도달을 위한 최소 변화량 계산
     # 남은 단계에서 매번 최대로 변해도 도달해야 하므로
     if remaining_steps == 1:
         # 마지막 단계: 정확히 목표값 도달
+        print(f"                마지막 단계 → 정확히 목표값 반환: {next_value}")
         return next_value
 
     # 5. 이번 단계에서 최소/최대 변화량 계산
@@ -286,22 +311,31 @@ def random_interpolate_with_guarantee(
     min_change_this_step = remaining_change - (
         max_change_this_step * (remaining_steps - 1)
     )
+    print(f"                최소 변화량 (목표 도달 보장): {min_change_this_step:.2f}")
 
     # 방향 고려 (증가/감소)
     if remaining_change > 0:
         # 증가 방향
         min_change = max(0, min_change_this_step)
         max_change = min(max_change_this_step, remaining_change)
+        print(
+            f"                증가 방향 → 변화량 범위: [{min_change:.2f}, {max_change:.2f}]"
+        )
     else:
         # 감소 방향
-        max_change = min(0, min_change_this_step)
-        min_change = max(-max_change_this_step, remaining_change)
+        min_change = max(min_change_this_step, -max_change_this_step)
+        max_change = min(0, remaining_change)
+        print(
+            f"                감소 방향 → 변화량 범위: [{min_change:.2f}, {max_change:.2f}]"
+        )
 
     # 6. 랜덤 변화량 선택
     random_change = random.uniform(min_change, max_change)
+    new_value = prev_value + random_change
+    print(f"                랜덤 변화량: {random_change:.2f} → 새 값: {new_value:.2f}")
 
     # 7. 새 값 반환
-    return prev_value + random_change
+    return new_value
 
 
 def interpolate_missing_data(
@@ -343,7 +377,10 @@ def interpolate_missing_data(
     # 2. 각 그룹별로 보간 수행
     interpolated_rows = []
 
-    for group in missing_groups:
+    for group_idx, group in enumerate(missing_groups, start=1):
+        print(f"    [DEBUG] 누락 그룹 {group_idx}/{len(missing_groups)} 처리 시작")
+        print(f"            시간대: {group[0]} ~ {group[-1]} ({len(group)}시간)")
+
         # 2-1. 이 그룹의 이전/이후 데이터 찾기
         first_missing = group[0]
         last_missing = group[-1]
@@ -351,9 +388,13 @@ def interpolate_missing_data(
         prev_data = df[df["ACQU_TIME"] < first_missing].iloc[-1]
         next_data = df[df["ACQU_TIME"] > last_missing].iloc[0]
 
+        print(f"            이전 데이터 시간: {prev_data['ACQU_TIME']}")
+        print(f"            다음 데이터 시간: {next_data['ACQU_TIME']}")
+
         missing_hours = len(group)
 
         # 2-2. 각 센서 컬럼별로 검증
+        print(f"    [DEBUG] 변동률 검증 시작 (센서 {len(sensor_columns)}개)")
         for col in sensor_columns:
             prev_value = prev_data[col]
             next_value = next_data[col]
@@ -361,10 +402,15 @@ def interpolate_missing_data(
             # 변동률 검증
             validate_variation_rate(prev_value, next_value, missing_hours, col)
 
+        print("    [DEBUG] 모든 센서 변동률 검증 완료\n")
+
         # 2-3. 그룹 내 각 시간대 보간
         current_values = {col: prev_data[col] for col in sensor_columns}
+        print(f"    [DEBUG] 보간 시작 ({missing_hours}시간)")
 
         for step, missing_time in enumerate(group, start=1):
+            print(f"      [DEBUG] {missing_time} 보간 중 (단계 {step}/{missing_hours})")
+
             # 새 행 생성
             new_row = prev_data.copy()
             new_row["ACQU_TIME"] = missing_time
@@ -380,9 +426,13 @@ def interpolate_missing_data(
                 )
                 new_row[col] = round(interpolated_value, DECIMAL_PLACES)
                 current_values[col] = new_row[col]
+                print(f"                {col} 보간 완료: {new_row[col]}")
 
             new_row["DATA_SOURCE_TYPE"] = "ESTIMATED"
             interpolated_rows.append(new_row)
+            print(f"      [DEBUG] {missing_time} 보간 완료\n")
+
+        print(f"    [DEBUG] 누락 그룹 {group_idx} 처리 완료\n")
 
     # 3. 원본과 병합 후 정렬
     result = pd.concat([df, pd.DataFrame(interpolated_rows)], ignore_index=True)
