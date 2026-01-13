@@ -234,8 +234,11 @@ def validate_variation_rate(
     total_change_needed = abs(next_value - prev_value)
 
     # 3. 누락 시간 동안 변동률만큼 변할 수 있는 최대 변화량
-    max_change_per_hour = abs(prev_value * variation_rate)
-    max_total_change = max_change_per_hour * missing_hours
+    # 중간 단계들 (missing_hours - 1개): prev_value 기준 변동률
+    # 마지막 보간 → 목표값: next_value 기준 변동률
+    intermediate_steps_change = abs(prev_value * variation_rate) * (missing_hours - 1)
+    last_step_change = abs(next_value * variation_rate)
+    max_total_change = intermediate_steps_change + last_step_change
 
     # 4. 검증: 필요 변화량 <= 최대 변화량
     if total_change_needed > max_total_change:
@@ -269,11 +272,8 @@ def _calculate_change_range(
             # 중간 단계: 변동률 전체 범위 활용
             return (-max_change_this_step, max_change_this_step)
         else:
-            # 마지막 단계: 목표값 인근 랜덤 도달
-            return (
-                remaining_change - max_change_this_step * 0.3,
-                remaining_change + max_change_this_step * 0.3
-            )
+            # 마지막 단계: 변동률 전체 범위 사용 (중간 단계와 동일)
+            return (-max_change_this_step, max_change_this_step)
 
     # 2. 목표값이 먼 경우 (기존 로직)
     if is_last_step:
@@ -350,10 +350,7 @@ def random_interpolate_with_guarantee(
     # 4. 변화량 범위 계산 (헬퍼 함수 사용)
     is_last_step = remaining_steps == 1
     min_change, max_change = _calculate_change_range(
-        remaining_change,
-        max_change_this_step,
-        remaining_steps,
-        is_last_step
+        remaining_change, max_change_this_step, remaining_steps, is_last_step
     )
 
     # 5. 디버그 로그 출력
@@ -361,12 +358,10 @@ def random_interpolate_with_guarantee(
     if is_near_target:
         if is_last_step:
             print(
-                "                [특수 케이스] 목표값 인근 → 마지막 단계 랜덤 도달"
+                "                [특수 케이스] 목표값 근처 → 마지막 단계도 변동률 전체 범위 사용"
             )
         else:
-            print(
-                "                [특수 케이스] 목표값 인근 → 변동률 전체 범위 활용"
-            )
+            print("                [특수 케이스] 목표값 인근 → 변동률 전체 범위 활용")
     else:
         direction = "증가" if remaining_change > 0 else "감소"
         step_type = "마지막 단계" if is_last_step else "중간 단계"
