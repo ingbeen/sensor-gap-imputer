@@ -265,41 +265,64 @@ def random_interpolate_with_guarantee(
     Returns:
         보간된 값
     """
+    print(
+        f"        [DEBUG] random_interpolate_with_guarantee 호출: {sensor_column}, 단계 {current_step}/{missing_hours}"
+    )
+    print(f"                현재값: {prev_value}, 목표값: {next_value}")
+
     # 1. 남은 변화량 계산
     remaining_change = next_value - prev_value
+    print(f"                남은 변화량: {remaining_change:.2f}")
 
     # 2. 남은 단계 수
     remaining_steps = missing_hours - current_step + 1
+    print(f"                남은 단계: {remaining_steps}")
 
     # 3. 센서별 변동률 이내에서 변화 가능한 범위
     variation_rate = MAX_VARIATION_RATES[sensor_column]
     max_change_this_step = abs(prev_value * variation_rate)
+    print(
+        f"                이번 단계 최대 변화량: ±{max_change_this_step:.2f} ({variation_rate*100}%)"
+    )
 
     # 4. 목표 도달을 위한 최소 변화량 계산
     # 남은 단계에서 매번 최대로 변해도 도달해야 하므로
     if remaining_steps == 1:
         # 마지막 단계: 정확히 목표값 도달
+        print(f"                마지막 단계 → 정확히 목표값 반환: {next_value}")
         return next_value
 
     # 5. 이번 단계에서 최소/최대 변화량 계산
-    # 최소: 남은 단계 모두 최대로 변해도 목표 도달하도록
-    min_change_this_step = remaining_change - (
-        max_change_this_step * (remaining_steps - 1)
-    )
-
-    # 방향 고려 (증가/감소)
+    # 남은 단계 동안 최대 변화량으로 변해서 목표 도달 가능한 범위 계산
     if remaining_change > 0:
         # 증가 방향
+        # 최소: 이번에 적어도 (목표 - 남은단계×최대변화) 만큼 변해야 함
+        min_change_this_step = remaining_change - (
+            max_change_this_step * (remaining_steps - 1)
+        )
         min_change = max(0, min_change_this_step)
         max_change = min(max_change_this_step, remaining_change)
+        print(
+            f"                증가 방향 → 변화량 범위: [{min_change:.2f}, {max_change:.2f}]"
+        )
     else:
         # 감소 방향
-        min_change = max(min_change_this_step, -max_change_this_step)
-        max_change = min(0, remaining_change)
+        # 절댓값으로 계산: |remaining_change| - max_change × (remaining_steps - 1)
+        abs_remaining = abs(remaining_change)
+        min_change_abs = abs_remaining - (max_change_this_step * (remaining_steps - 1))
+        min_change_abs = max(0, min_change_abs)
+
+        # 감소 방향이므로 음수로 변환
+        max_change = -min_change_abs  # 최소한 이만큼은 감소해야 함
+        min_change = max(-max_change_this_step, remaining_change)  # 최대 변화량 제한
+        print(
+            f"                감소 방향 → 변화량 범위: [{min_change:.2f}, {max_change:.2f}]"
+        )
 
     # 6. 랜덤 변화량 선택
     random_change = random.uniform(min_change, max_change)
     new_value = prev_value + random_change
+    print(f"                랜덤 변화량: {random_change:.2f} → 새 값: {new_value:.2f}")
 
     # 7. 새 값 반환
     return new_value
