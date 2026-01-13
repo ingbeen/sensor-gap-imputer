@@ -285,39 +285,53 @@ def random_interpolate_with_guarantee(
         f"                이번 단계 최대 변화량: ±{max_change_this_step:.2f} ({variation_rate*100}%)"
     )
 
-    # 4. 목표 도달을 위한 최소 변화량 계산
-    # 남은 단계에서 매번 최대로 변해도 도달해야 하므로
+    # 4. 이번 단계에서 최소/최대 변화량 계산
     if remaining_steps == 1:
-        # 마지막 단계: 정확히 목표값 도달
-        print(f"                마지막 단계 → 정확히 목표값 반환: {next_value}")
-        return next_value
-
-    # 5. 이번 단계에서 최소/최대 변화량 계산
-    # 남은 단계 동안 최대 변화량으로 변해서 목표 도달 가능한 범위 계산
-    if remaining_change > 0:
-        # 증가 방향
-        # 최소: 이번에 적어도 (목표 - 남은단계×최대변화) 만큼 변해야 함
-        min_change_this_step = remaining_change - (
-            max_change_this_step * (remaining_steps - 1)
-        )
-        min_change = max(0, min_change_this_step)
-        max_change = min(max_change_this_step, remaining_change)
-        print(
-            f"                증가 방향 → 변화량 범위: [{min_change:.2f}, {max_change:.2f}]"
-        )
+        # 마지막 단계: 목표값 인근 랜덤 도달
+        # 변동률 이내에서 목표값에 최대한 가깝게 도달
+        if remaining_change > 0:
+            # 증가 방향: 남은 변화량과 최대 변화량 중 작은 값 사용
+            min_change = max(0, remaining_change - max_change_this_step * 0.5)
+            max_change = min(max_change_this_step, remaining_change)
+            print(
+                f"                마지막 단계 (증가) → 변화량 범위: [{min_change:.2f}, {max_change:.2f}]"
+            )
+        else:
+            # 감소 방향
+            abs_remaining = abs(remaining_change)
+            max_change = max(-max_change_this_step, remaining_change)
+            min_change = min(0, remaining_change + max_change_this_step * 0.5)
+            print(
+                f"                마지막 단계 (감소) → 변화량 범위: [{min_change:.2f}, {max_change:.2f}]"
+            )
     else:
-        # 감소 방향
-        # 절댓값으로 계산: |remaining_change| - max_change × (remaining_steps - 1)
-        abs_remaining = abs(remaining_change)
-        min_change_abs = abs_remaining - (max_change_this_step * (remaining_steps - 1))
-        min_change_abs = max(0, min_change_abs)
+        # 중간 단계: 남은 단계 동안 최대 변화량으로 변해서 목표 도달 가능한 범위 계산
+        if remaining_change > 0:
+            # 증가 방향
+            # 최소: 이번에 적어도 (목표 - 남은단계×최대변화) 만큼 변해야 함
+            min_change_this_step = remaining_change - (
+                max_change_this_step * (remaining_steps - 1)
+            )
+            min_change = max(0, min_change_this_step)
+            max_change = min(max_change_this_step, remaining_change)
+            print(
+                f"                증가 방향 → 변화량 범위: [{min_change:.2f}, {max_change:.2f}]"
+            )
+        else:
+            # 감소 방향
+            # 절댓값으로 계산: |remaining_change| - max_change × (remaining_steps - 1)
+            abs_remaining = abs(remaining_change)
+            min_change_abs = abs_remaining - (
+                max_change_this_step * (remaining_steps - 1)
+            )
+            min_change_abs = max(0, min_change_abs)
 
-        # 감소 방향이므로 음수로 변환
-        max_change = -min_change_abs  # 최소한 이만큼은 감소해야 함
-        min_change = max(-max_change_this_step, remaining_change)  # 최대 변화량 제한
-        print(
-            f"                감소 방향 → 변화량 범위: [{min_change:.2f}, {max_change:.2f}]"
-        )
+            # 감소 방향이므로 음수로 변환
+            max_change = -min_change_abs  # 최소한 이만큼은 감소해야 함
+            min_change = max(-max_change_this_step, remaining_change)  # 최대 변화량 제한
+            print(
+                f"                감소 방향 → 변화량 범위: [{min_change:.2f}, {max_change:.2f}]"
+            )
 
     # 6. 랜덤 변화량 선택
     random_change = random.uniform(min_change, max_change)
@@ -567,8 +581,7 @@ def main() -> None:
         # 6. INSERT SQL 생성
         print("6. INSERT SQL 생성")
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = OUTPUT_DIR / f"insert_estimated_data_{timestamp}.sql"
+        output_path = OUTPUT_DIR / "insert_estimated_data.sql"
         generate_insert_sql(interpolated_df, constants, output_path)
 
         print("\n=== 처리 완료 ===")
