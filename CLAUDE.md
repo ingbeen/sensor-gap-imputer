@@ -36,7 +36,27 @@ CSV 형식의 센서 데이터에서 시간 누락을 감지하고, 누락된 �
 
 - **언어**: Python 3.12
 - **의존성 관리**: Poetry
-- **주요 라이브러리**: pandas
+- **주요 라이브러리**: pandas, random (내장)
+
+## 프로젝트 상수
+
+```python
+INPUT_CSV_PATH = Path("storage/input/COM_SENSOR_DATA.csv")
+OUTPUT_DIR = Path("storage/output")
+REQUIRED_CONSTANT_COLUMNS = ["EQUIP_SN", "FARM_ID", "SITE_ID", "MEAS_DEPTH"]
+SENSOR_COLUMNS = ["VAL_TP", "VAL_DO", "VAL_DS", "VAL_PH", "VAL_OR", "VAL_SL"]
+TIME_INTERVAL = timedelta(hours=1)
+MAX_VARIATION_RATES = {
+    "VAL_TP": 0.015,  # 수온: ±1.5%
+    "VAL_DO": 0.005,  # 용존산소: ±0.5%
+    "VAL_DS": 0.005,  # 포화도: ±0.5%
+    "VAL_PH": 0.005,  # pH: ±0.5%
+    "VAL_OR": 0.01,   # ORP: ±1%
+    "VAL_SL": 0.005,  # 염도: ±0.5%
+}
+DECIMAL_PLACES = 2  # 소수점 자릿수
+BATCH_SIZE = 10  # INSERT ALL 최대 줄 수
+```
 
 ## 디렉토리 구조
 
@@ -88,42 +108,86 @@ sensor-gap-imputer/
 
 ### 보간 알고리즘
 
-**기본 원칙**:
+#### 센서별 변동률 설정
 
-- 누락 구간의 이전/이후 데이터를 파악
-- 누락 시간 동안 1%씩 변해도 목표값 도달 가능한지 검증
-- 1% 이내 랜덤 변화로 보간하되 목표값 도달 보장
+각 센서는 고유한 변동률을 가지며, `MAX_VARIATION_RATES` 상수로 관리합니다:
 
-**검증 로직**:
-
+```python
+MAX_VARIATION_RATES = {
+    "VAL_TP": 0.015,  # 수온: ±1.5%
+    "VAL_DO": 0.005,  # 용존산소: ±0.5%
+    "VAL_DS": 0.005,  # 포화도: ±0.5%
+    "VAL_PH": 0.005,  # pH: ±0.5%
+    "VAL_OR": 0.01,   # ORP: ±1%
+    "VAL_SL": 0.005,  # 염도: ±0.5%
+}
 ```
-예시 1: 보간 가능
+
+**변동률 의미**:
+- 각 시간 단계마다 센서값이 변할 수 있는 최대 비율
+- 예: `VAL_TP = 0.015`는 수온이 매 시간 현재값의 ±1.5% 이내로 변화 가능함을 의미
+
+#### 기본 원칙
+
+1. 누락 구간의 이전/이후 데이터를 파악
+2. 센서별 변동률로 변해도 목표값 도달 가능한지 검증
+3. 변동률 이내 랜덤 변화로 보간하되 목표값 도달 보장
+
+#### 검증 로직
+
+**예시 1: 보간 가능 (수온, 변동률 1.5%)**
+```
 - 10시: 20도
 - 11~13시: 누락 (3시간)
 - 14시: 20.6도
 - 필요 변화: 0.6도
-- 최대 가능 변화: 20도 × 1% × 3시간 = 0.6도
-- 0.6도 ≤ 0.6도 → OK
-
-예시 2: 보간 불가능
-- 10시: 20도
-- 11~13시: 누락 (3시간)
-- 14시: 21도
-- 필요 변화: 1도
-- 최대 가능 변화: 20도 × 1% × 3시간 = 0.6도
-- 1도 > 0.6도 → 오류!
+- 최대 가능 변화: 20도 × 1.5% × 3시간 = 0.9도
+- 0.6도 ≤ 0.9도 → OK
 ```
 
-**랜덤 보간 방식**:
+**예시 2: 보간 불가능 (용존산소, 변동률 0.5%)**
+```
+- 10시: 10.0 mg/L
+- 11~13시: 누락 (3시간)
+- 14시: 10.3 mg/L
+- 필요 변화: 0.3 mg/L
+- 최대 가능 변화: 10.0 × 0.5% × 3시간 = 0.15 mg/L
+- 0.3 > 0.15 → 오류!
+```
 
-- 각 시간마다 1% 이내에서 랜덤 변화량 선택
-- 남은 시간 동안 1%씩 변해도 목표값 도달하도록 최소 변화량 보장
-- 마지막 시간에 정확히 목표값 도달
+#### 랜덤 보간 방식
 
-**오류 조건**:
+**증가 방향 (prev_value < next_value)**:
 
-- 누락 시간 동안 매 시간 1%씩 변해도 목표값에 도달할 수 없는 경우
-- 스크립트 실행 중지 및 오류 메시지 출력
+1. **중간 단계**:
+   - 최소 변화량: `(필요 변화량 - 남은단계 × 최대변화량)`와 0 중 큰 값
+   - 최대 변화량: `min(센서별 최대변화량, 필요 변화량)`
+   - 범위 내에서 랜덤 선택
+
+2. **마지막 단계**:
+   - 목표값 인근에 도달하도록 랜덤 조정
+   - 변동률 이내에서 목표값에 최대한 가깝게
+
+**감소 방향 (prev_value > next_value)**:
+
+1. **중간 단계**:
+   - 절댓값으로 계산: `|필요 변화량| - 최대변화량 × (남은단계 - 1)`
+   - 음수로 변환하여 적용
+   - 최대 변화량 제한 준수
+
+2. **마지막 단계**:
+   - 증가 방향과 동일한 논리로 음수 범위에서 처리
+
+**목표값 도달 보장**:
+- 각 단계마다 "남은 시간 동안 최대 변화량으로 변해도 목표 도달 가능" 조건 유지
+- 마지막 단계에서 목표값 인근 랜덤 도달
+- 과도한 변화 방지 및 자연스러운 데이터 생성
+
+#### 오류 조건
+
+- 누락 시간 동안 센서별 변동률로 변해도 목표값에 도달할 수 없는 경우
+- 오류 메시지에 센서명, 변동률, 필요/최대 변화량 포함
+- 스크립트 실행 중지
 
 ### INSERT SQL 생성 규칙
 
@@ -181,12 +245,54 @@ poetry install
 poetry run python main.py
 ```
 
+### 실행 결과
+
+스크립트 실행 시 다음과 같은 출력을 확인할 수 있습니다:
+
+```
+=== 센서 데이터 보간 및 SQL 생성 시작 ===
+
+1. CSV 파일 읽기: storage/input/COM_SENSOR_DATA.csv
+   총 N개 레코드 읽음
+
+2. 필수 컬럼 검증
+   EQUIP_SN: MSB-M-250006
+   FARM_ID: ...
+   SITE_ID: ...
+   MEAS_DEPTH: ...
+
+3. 시간 누락 감지
+   누락된 시간대: N시간
+   - YYYY-MM-DD HH:MM:SS ~ YYYY-MM-DD HH:MM:SS (N시간)
+
+4. 보간 대상 센서 컬럼 판단
+   보간 대상: VAL_TP, VAL_DO, ...
+
+5. 데이터 보간 수행
+   [DEBUG] random_interpolate_with_guarantee 호출: ...
+   보간 완료 (총 N개 레코드)
+
+6. INSERT SQL 생성
+SQL 파일 생성 완료: storage/output/insert_estimated_data.sql
+보간된 데이터 개수: N개
+
+=== 처리 완료 ===
+```
+
+### 출력 파일
+
+- **위치**: `storage/output/insert_estimated_data.sql`
+- **내용**: 보간된 데이터만 포함된 INSERT SQL
+- **특징**: DATA_SOURCE_TYPE = 'ESTIMATED'인 행만 출력
+
 ## 주의사항
 
 1. **데이터 무결성**: EQUIP_SN, FARM_ID, SITE_ID, MEAS_DEPTH는 CSV 전체에서 동일해야 함
-2. **보간 범위**: 변동률 ±1% 초과 시 오류 발생 및 중지
-3. **SQL 안정성**: INSERT ALL 구문은 최대 10줄로 제한
-4. **타임스탬프**: Oracle TIMESTAMP 형식 준수 필수
+2. **센서별 변동률**: 각 센서마다 다른 변동률 적용 (수온 ±1.5%, 기타 ±0.5%~1%)
+3. **보간 범위**: 센서별 변동률 초과 시 오류 발생 및 중지
+4. **SQL 안정성**: INSERT ALL 구문은 최대 10줄로 제한
+5. **타임스탬프**: Oracle TIMESTAMP 형식 준수 필수
+6. **디버그 출력**: 보간 과정의 상세 로그가 콘솔에 출력됨
 
 ## 코딩 표준
 
@@ -235,7 +341,37 @@ poetry run python main.py
 3. **확장성**: 도메인별 모듈 독립성 유지
 4. **사용자 중심**: 한글 메시지, 명확한 오류 정보
 
+## 주요 함수 구조
+
+### 핵심 함수
+
+1. **`load_csv()`**: CSV 파일 읽기 및 시간 정렬
+2. **`validate_constant_columns()`**: 필수 동일 컬럼 검증
+3. **`identify_missing_timestamps()`**: 시간 누락 감지
+4. **`check_sensor_columns()`**: 보간 대상 센서 판단
+5. **`validate_variation_rate()`**: 센서별 변동률 검증
+6. **`random_interpolate_with_guarantee()`**: 랜덤 보간 (목표값 도달 보장)
+7. **`interpolate_missing_data()`**: 전체 보간 프로세스 조율
+8. **`generate_insert_sql()`**: INSERT SQL 생성
+
+### 보간 프로세스 흐름
+
+```
+1. 누락 시간대를 연속된 그룹으로 분리
+   └─→ 각 그룹별로 독립적으로 처리
+
+2. 각 그룹마다:
+   ├─ 이전/이후 데이터 찾기
+   ├─ 센서별 변동률 검증 (validate_variation_rate)
+   └─ 시간 단계별 랜덤 보간 (random_interpolate_with_guarantee)
+
+3. 보간된 행에 DATA_SOURCE_TYPE = "ESTIMATED" 마킹
+
+4. 원본 데이터와 병합 후 시간순 정렬
+```
+
 ## 참고 자료
 
-- Oracle 11g INSERT ALL 구문: [Oracle Documentation](https://docs.oracle.com/cd/E11882_01/server.112/e41084/statements_9014.htm)
-- 보간 알고리즘: 랜덤 보간 + 1% 변동률 제약 + 목표값 도달 보장
+- **Oracle 11g INSERT ALL 구문**: [Oracle Documentation](https://docs.oracle.com/cd/E11882_01/server.112/e41084/statements_9014.htm)
+- **보간 알고리즘**: 랜덤 보간 + 센서별 변동률 제약 + 목표값 도달 보장
+- **변동률 설정 원리**: 각 센서의 물리적 특성에 따라 다른 변동률 적용

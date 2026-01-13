@@ -246,6 +246,68 @@ def validate_variation_rate(
         )
 
 
+def _calculate_change_range(
+    remaining_change: float,
+    max_change_this_step: float,
+    remaining_steps: int,
+    is_last_step: bool,
+) -> tuple[float, float]:
+    """변화량 범위를 계산합니다.
+
+    Args:
+        remaining_change: 남은 변화량
+        max_change_this_step: 이번 단계 최대 변화량 (센서별 변동률 기준)
+        remaining_steps: 남은 단계 수
+        is_last_step: 마지막 단계 여부
+
+    Returns:
+        (최소 변화량, 최대 변화량) 튜플
+    """
+    # 1. 목표값 근처 도달 케이스 (변동률 범위 이내)
+    if abs(remaining_change) <= max_change_this_step:
+        if not is_last_step:
+            # 중간 단계: 변동률 전체 범위 활용
+            return (-max_change_this_step, max_change_this_step)
+        else:
+            # 마지막 단계: 목표값 인근 랜덤 도달
+            return (
+                remaining_change - max_change_this_step * 0.3,
+                remaining_change + max_change_this_step * 0.3
+            )
+
+    # 2. 목표값이 먼 경우 (기존 로직)
+    if is_last_step:
+        # 마지막 단계: 목표값 인근 도달 허용
+        if remaining_change > 0:
+            min_change = max(0, remaining_change - max_change_this_step * 0.5)
+            max_change = min(max_change_this_step, remaining_change)
+        else:
+            abs_remaining = abs(remaining_change)
+            max_change = max(-max_change_this_step, remaining_change)
+            min_change = min(0, remaining_change + max_change_this_step * 0.5)
+    else:
+        # 중간 단계: 목표값 방향으로 진행하면서 도달 보장
+        if remaining_change > 0:
+            # 증가 방향
+            min_change_this_step = remaining_change - (
+                max_change_this_step * (remaining_steps - 1)
+            )
+            min_change = max(0, min_change_this_step)
+            max_change = min(max_change_this_step, remaining_change)
+        else:
+            # 감소 방향
+            abs_remaining = abs(remaining_change)
+            min_change_abs = abs_remaining - (
+                max_change_this_step * (remaining_steps - 1)
+            )
+            min_change_abs = max(0, min_change_abs)
+
+            max_change = -min_change_abs
+            min_change = max(-max_change_this_step, remaining_change)
+
+    return (min_change, max_change)
+
+
 def random_interpolate_with_guarantee(
     prev_value: float,
     next_value: float,
@@ -285,53 +347,32 @@ def random_interpolate_with_guarantee(
         f"                이번 단계 최대 변화량: ±{max_change_this_step:.2f} ({variation_rate*100}%)"
     )
 
-    # 4. 이번 단계에서 최소/최대 변화량 계산
-    if remaining_steps == 1:
-        # 마지막 단계: 목표값 인근 랜덤 도달
-        # 변동률 이내에서 목표값에 최대한 가깝게 도달
-        if remaining_change > 0:
-            # 증가 방향: 남은 변화량과 최대 변화량 중 작은 값 사용
-            min_change = max(0, remaining_change - max_change_this_step * 0.5)
-            max_change = min(max_change_this_step, remaining_change)
+    # 4. 변화량 범위 계산 (헬퍼 함수 사용)
+    is_last_step = remaining_steps == 1
+    min_change, max_change = _calculate_change_range(
+        remaining_change,
+        max_change_this_step,
+        remaining_steps,
+        is_last_step
+    )
+
+    # 5. 디버그 로그 출력
+    is_near_target = abs(remaining_change) <= max_change_this_step
+    if is_near_target:
+        if is_last_step:
             print(
-                f"                마지막 단계 (증가) → 변화량 범위: [{min_change:.2f}, {max_change:.2f}]"
+                "                [특수 케이스] 목표값 인근 → 마지막 단계 랜덤 도달"
             )
         else:
-            # 감소 방향
-            abs_remaining = abs(remaining_change)
-            max_change = max(-max_change_this_step, remaining_change)
-            min_change = min(0, remaining_change + max_change_this_step * 0.5)
             print(
-                f"                마지막 단계 (감소) → 변화량 범위: [{min_change:.2f}, {max_change:.2f}]"
+                "                [특수 케이스] 목표값 인근 → 변동률 전체 범위 활용"
             )
     else:
-        # 중간 단계: 남은 단계 동안 최대 변화량으로 변해서 목표 도달 가능한 범위 계산
-        if remaining_change > 0:
-            # 증가 방향
-            # 최소: 이번에 적어도 (목표 - 남은단계×최대변화) 만큼 변해야 함
-            min_change_this_step = remaining_change - (
-                max_change_this_step * (remaining_steps - 1)
-            )
-            min_change = max(0, min_change_this_step)
-            max_change = min(max_change_this_step, remaining_change)
-            print(
-                f"                증가 방향 → 변화량 범위: [{min_change:.2f}, {max_change:.2f}]"
-            )
-        else:
-            # 감소 방향
-            # 절댓값으로 계산: |remaining_change| - max_change × (remaining_steps - 1)
-            abs_remaining = abs(remaining_change)
-            min_change_abs = abs_remaining - (
-                max_change_this_step * (remaining_steps - 1)
-            )
-            min_change_abs = max(0, min_change_abs)
+        direction = "증가" if remaining_change > 0 else "감소"
+        step_type = "마지막 단계" if is_last_step else "중간 단계"
+        print(f"                {step_type} ({direction} 방향)")
 
-            # 감소 방향이므로 음수로 변환
-            max_change = -min_change_abs  # 최소한 이만큼은 감소해야 함
-            min_change = max(-max_change_this_step, remaining_change)  # 최대 변화량 제한
-            print(
-                f"                감소 방향 → 변화량 범위: [{min_change:.2f}, {max_change:.2f}]"
-            )
+    print(f"                변화량 범위: [{min_change:.2f}, {max_change:.2f}]")
 
     # 6. 랜덤 변화량 선택
     random_change = random.uniform(min_change, max_change)
