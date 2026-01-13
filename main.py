@@ -47,7 +47,7 @@ def load_csv(file_path: Path) -> pd.DataFrame:
         raise FileNotFoundError(f"CSV 파일을 찾을 수 없습니다: {file_path}")
 
     try:
-        df = pd.read_csv(file_path)
+        df = pd.read_csv(file_path, dtype={"SITE_ID": str})
         df["ACQU_TIME"] = pd.to_datetime(df["ACQU_TIME"])
         return df.sort_values("ACQU_TIME")
     except Exception as e:
