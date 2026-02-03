@@ -327,25 +327,25 @@ def random_interpolate_with_guarantee(
     Returns:
         보간된 값
     """
-    print(
-        f"        [DEBUG] random_interpolate_with_guarantee 호출: {sensor_column}, 단계 {current_step}/{missing_hours}"
-    )
-    print(f"                현재값: {prev_value}, 목표값: {next_value}")
+    # print(
+    #     f"        [DEBUG] random_interpolate_with_guarantee 호출: {sensor_column}, 단계 {current_step}/{missing_hours}"
+    # )
+    # print(f"                현재값: {prev_value}, 목표값: {next_value}")
 
     # 1. 남은 변화량 계산
     remaining_change = next_value - prev_value
-    print(f"                남은 변화량: {remaining_change:.2f}")
+    # print(f"                남은 변화량: {remaining_change:.2f}")
 
     # 2. 남은 단계 수
     remaining_steps = missing_hours - current_step + 1
-    print(f"                남은 단계: {remaining_steps}")
+    # print(f"                남은 단계: {remaining_steps}")
 
     # 3. 센서별 변동률 이내에서 변화 가능한 범위
     variation_rate = MAX_VARIATION_RATES[sensor_column]
     max_change_this_step = abs(prev_value * variation_rate)
-    print(
-        f"                이번 단계 최대 변화량: ±{max_change_this_step:.2f} ({variation_rate*100}%)"
-    )
+    # print(
+    #     f"                이번 단계 최대 변화량: ±{max_change_this_step:.2f} ({variation_rate*100}%)"
+    # )
 
     # 4. 변화량 범위 계산 (헬퍼 함수 사용)
     is_last_step = remaining_steps == 1
@@ -354,25 +354,25 @@ def random_interpolate_with_guarantee(
     )
 
     # 5. 디버그 로그 출력
-    is_near_target = abs(remaining_change) <= max_change_this_step
-    if is_near_target:
-        if is_last_step:
-            print(
-                "                [특수 케이스] 목표값 근처 → 마지막 단계도 변동률 전체 범위 사용"
-            )
-        else:
-            print("                [특수 케이스] 목표값 인근 → 변동률 전체 범위 활용")
-    else:
-        direction = "증가" if remaining_change > 0 else "감소"
-        step_type = "마지막 단계" if is_last_step else "중간 단계"
-        print(f"                {step_type} ({direction} 방향)")
+    # is_near_target = abs(remaining_change) <= max_change_this_step
+    # if is_near_target:
+    #     if is_last_step:
+    #         print(
+    #             "                [특수 케이스] 목표값 근처 → 마지막 단계도 변동률 전체 범위 사용"
+    #         )
+    #     else:
+    #         print("                [특수 케이스] 목표값 인근 → 변동률 전체 범위 활용")
+    # else:
+    #     direction = "증가" if remaining_change > 0 else "감소"
+    #     step_type = "마지막 단계" if is_last_step else "중간 단계"
+    #     print(f"                {step_type} ({direction} 방향)")
 
-    print(f"                변화량 범위: [{min_change:.2f}, {max_change:.2f}]")
+    # print(f"                변화량 범위: [{min_change:.2f}, {max_change:.2f}]")
 
     # 6. 랜덤 변화량 선택
     random_change = random.uniform(min_change, max_change)
     new_value = prev_value + random_change
-    print(f"                랜덤 변화량: {random_change:.2f} → 새 값: {new_value:.2f}")
+    # print(f"                랜덤 변화량: {random_change:.2f} → 새 값: {new_value:.2f}")
 
     # 7. 새 값 반환
     return new_value
